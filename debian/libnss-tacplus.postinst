@@ -11,8 +11,10 @@ case "$1" in
         # for this package, and won't break anything else.  Do nothing
         # if tacplus is already present in the passwd line
         if [ -e "/etc/nsswitch.conf" ]; then
-            sed -i -e '/tacplus\s/b' \
-                -e '/^passwd:/s/compat/tacplus &/' /etc/nsswitch.conf
+            sed -i -E -e '/tacplus\s/b' \
+                -e '/^passwd:/s/(compat|files)/tacplus &/' /etc/nsswitch.conf
+            sed -i -E -e '/tacplus\s/b' \
+                -e '/^group:/s/(compat|files)/tacplus &/' /etc/nsswitch.conf
         fi
     ;;
 

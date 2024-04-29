@@ -1,6 +1,6 @@
 ###########################################################################
 ##
-## Copyright 2014, 2015, 2016 Cumulus Networks.  All rights reserved.
+## Copyright 2014, 2015, 2016, 2018 Cumulus Networks.  All rights reserved.
 ## Author: Dave Olson <olson@cumulusnetworks.com>
 ##
 ###########################################################################
@@ -15,6 +15,8 @@ module_LTLIBRARIES = libnss_tacplus.la
 libnss_tacplus_la_SOURCES = \
 nss_tacplus.c \
 nss_tacplus.h
+
+dist_man_MANS = tacplus_nss.conf.5
 
 libnss_tacplus_la_CFLAGS = $(AM_CFLAGS)
 # Version 2.0 because that's the NSS module version, and they must match

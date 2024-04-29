@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014, 2015, 2016, 2017 Cumulus Networks, Inc.
+ * Copyright (C) 2014, 2015, 2016, 2017, 2018, 2019 Cumulus Networks, Inc.
  * All rights reserved.
  * Author: Dave Olson <olson@cumulusnetworks.com>
  *
@@ -37,6 +37,8 @@
 #include <ctype.h>
 #include <nss.h>
 #include <libaudit.h>
+#include <stddef.h>
+#include <grp.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 
@@ -63,6 +65,7 @@ struct pwbuf {
 typedef struct {
     struct addrinfo *addr;
     char *key;
+    unsigned not_resp;
 } tacplus_server_t;
 
 /* set from configuration file parsing */
@@ -75,8 +78,12 @@ static char vrfname[64];
 static char *exclude_users;
 static uid_t min_uid = ~0U; /*  largest possible */
 static int debug;
-uint16_t use_tachome;
+static int printed_srvs;
+static uint16_t use_tachome;
 static int conf_parsed = 0;
+static struct sockaddr src_sockaddr;
+static struct addrinfo src_addr_info;
+static struct addrinfo *src_addr;
 
 static void get_remote_addr(void);
 
@@ -98,9 +105,11 @@ reset_config(void)
         exclude_users = NULL;
     }
     debug = 0;
+    printed_srvs = 0;
     use_tachome = 0;
     tac_timeout = 0;
     min_uid = ~0U;
+    src_addr = NULL;
 
     for(i = 0; i < nservers; i++) {
         if(tac_srv[i].key) {
@@ -108,7 +117,28 @@ reset_config(void)
             tac_srv[i].key = NULL;
         }
         tac_srv[i].addr = NULL;
+        tac_srv[i].not_resp = 0;
     }
+}
+
+/* Convert ip address string to address info.
+ * It returns 0 on success, or -1 otherwise
+ * It supports ipv4 only.
+ */
+static int str_to_ipv4(const char *srcaddr, struct addrinfo *p_addr_info)
+{
+    struct sockaddr_in *s_in;
+
+    s_in = (struct sockaddr_in *)p_addr_info->ai_addr;
+    s_in->sin_family = AF_INET;
+    s_in->sin_addr.s_addr = INADDR_ANY;
+
+    if (inet_pton(AF_INET, srcaddr, &(s_in->sin_addr)) == 1) {
+        p_addr_info->ai_family = AF_INET;
+        p_addr_info->ai_addrlen = sizeof (struct sockaddr_in);
+        return 0;
+    }
+    return -1;
 }
 
 static int nss_tacplus_config(int *errnop, const char *cfile, int top)
@@ -146,8 +176,8 @@ static int nss_tacplus_config(int *errnop, const char *cfile, int top)
                 break; /* found removed or different file, so re-parse */
         }
         reset_config();
-        syslog(LOG_NOTICE, "%s: Configuration file(s) have changed, re-initializing",
-            nssname);
+        syslog(LOG_NOTICE, "%s: Configuration file(s) have changed, "
+               "re-initializing", nssname);
     }
 
     /*  don't check for failures, we'll just skip, don't want to error out */
@@ -181,11 +211,15 @@ static int nss_tacplus_config(int *errnop, const char *cfile, int top)
         else if (!strncmp (lbuf, "user_homedir=", 13))
             use_tachome = (uint16_t)strtoul(lbuf+13, NULL, 0);
         else if (!strncmp (lbuf, "timeout=", 8)) {
-            tac_timeout = (int)strtoul(lbuf+8, NULL, 0);
-            if (tac_timeout < 0) /* explict neg values disable poll() use */
-                tac_timeout = 0;
-            else /* poll() only used if timeout is explictly set */
+            char *argend;
+            int val = (unsigned)strtol(lbuf+8, &argend, 0);
+            if (argend != (lbuf+8) && val >= 0) {
+                tac_timeout = val;
                 tac_readtimeout_enable = 1;
+            }
+            else
+                syslog(LOG_WARNING, "%s: invalid parameter value (%s)",
+                    nssname, lbuf);
         }
         /*
          * This next group is here to prevent a warning in the
@@ -203,8 +237,9 @@ static int nss_tacplus_config(int *errnop, const char *cfile, int top)
                 if((tac_srv[tac_key_no].key = strdup(lbuf+7)))
                     tac_key_no++;
                 else
-                    syslog(LOG_ERR, "%s: unable to copy server secret %s",
-                        nssname, lbuf+7);
+                    /* don't log the actual line, it's a security issue */
+                    syslog(LOG_ERR, "%s: unable to copy server secret %d: %m",
+                        nssname, tac_key_no);
             }
             /* handle case where 'secret=' was given after a 'server='
              * parameter, fill in the current secret */
@@ -212,6 +247,21 @@ static int nss_tacplus_config(int *errnop, const char *cfile, int top)
                 if (tac_srv[i].key)
                     continue;
                 tac_srv[i].key = strdup(lbuf+7);
+            }
+        }
+        else if (!strncmp (lbuf, "source_ip=", 10)) {
+            const char *srcip = lbuf + 10;
+            /* if source ip address, convert it to addr info  */
+            memset (&src_addr_info, 0, sizeof (struct addrinfo));
+            memset (&src_sockaddr, 0, sizeof (struct sockaddr));
+            src_addr_info.ai_addr = &src_sockaddr;
+            if (str_to_ipv4 (srcip, &src_addr_info) == 0)
+                src_addr = &src_addr_info;
+            else {
+                src_addr = NULL; /* for re-parsing or errors */
+                syslog(LOG_WARNING,
+                       "%s: unable to convert %s to an IPv4 address", nssname,
+                       lbuf);
             }
         }
         else if(!strncmp(lbuf, "exclude_users=", 14)) {
@@ -251,7 +301,7 @@ static int nss_tacplus_config(int *errnop, const char *cfile, int top)
                 port = strchr(server_buf, ':');
                 if(port != NULL) {
                     *port = '\0';
-					port++;
+                    port++;
                 }
                 if((rv = getaddrinfo(server_buf, (port == NULL) ?
                             "49" : port, &hints, &servers)) == 0) {
@@ -278,14 +328,38 @@ static int nss_tacplus_config(int *errnop, const char *cfile, int top)
             }
         }
         else if(debug) /* ignore unrecognized lines, unless debug on */
-            syslog(LOG_WARNING, "%s: unrecognized parameter: %s",
-                nssname, lbuf);
+            /*  Don't complain about acct_all, may be set in shared
+             *  config, even if we don't use it.
+             */
+            if(strncmp(lbuf, "acct_all=", 9))
+                syslog(LOG_WARNING, "%s: unrecognized parameter: %s",
+                    nssname, lbuf);
     }
     fclose(conf);
 
 
     return 0;
 }
+
+/* common get config code at each entry point */
+static int
+get_config(int *errp, int level)
+{
+    int result = nss_tacplus_config(errp, config_file, 1);
+    conf_parsed = result == 0 ? 2 : 1;
+
+    get_remote_addr();
+
+    /* no config file, no servers, etc.
+     * this is a debug because privileges may not allow access
+     * for included files.
+    */
+    if(debug && result)
+        syslog(LOG_DEBUG, "%s: bad config or server line for nss_tacplus",
+            nssname);
+    return result;
+}
+
 
 /*
  * Separate function so we can print first time we try to connect,
@@ -295,23 +369,23 @@ static int nss_tacplus_config(int *errnop, const char *cfile, int top)
  */
 static void print_servers(void)
 {
-    static int printed = 0;
     int n;
 
-    if (printed || !debug)
+    if (printed_srvs || !debug)
         return;
-    printed = 1;
+    printed_srvs = 1;
 
     if(tac_srv_no == 0)
-        syslog(LOG_DEBUG, "%s:%s: no TACACS %s in config (or no perm),"
+        syslog(LOG_DEBUG, "%s:%s: no TACACS %s in config (or no permission),"
             " giving up",
             nssname, __FUNCTION__, tac_srv_no ? "service" :
             (*tac_service ? "server" : "service and no server"));
 
+    /*  do not log tac_srv[n].key; it's a security issue */
     for(n = 0; n < tac_srv_no; n++)
-        syslog(LOG_DEBUG, "%s: server[%d] { addr=%s, key='%s' }", nssname,
+        syslog(LOG_DEBUG, "%s: server[%d] { addr=%s }", nssname,
             n, tac_srv[n].addr ? tac_ntop(tac_srv[n].addr->ai_addr)
-            : "unknown", tac_srv[n].key);
+            : "unknown");
 }
 
 /*
@@ -366,8 +440,8 @@ pwcopy(char *buf, size_t len, struct passwd *srcpw, struct passwd *destpw,
     if (tachome && *shell == 'r') {
         tachome = 0;
         if(debug > 1)
-            syslog(LOG_DEBUG, "%s tacacs login %s with user_homedir not allowed; "
-                "shell is %s", nssname, srcpw->pw_name, buf);
+            syslog(LOG_DEBUG, "%s tacacs login %s with user_homedir not allowed"
+                "; shell is %s", nssname, srcpw->pw_name, buf);
     }
     cnt++;
     buf += cnt;
@@ -391,7 +465,6 @@ pwcopy(char *buf, size_t len, struct passwd *srcpw, struct passwd *destpw,
         cnt = snprintf(buf, len, "%s", srcpw->pw_dir ? srcpw->pw_dir : "");
     destpw->pw_dir = buf;
     cnt++;
-    buf += cnt;
     len -= cnt;
     if(len < 0) {
         if(debug)
@@ -417,17 +490,17 @@ pwcopy(char *buf, size_t len, struct passwd *srcpw, struct passwd *destpw,
  *
  * If not found, then try to map to a localuser tacacsN where N <= to the
  * TACACS+ privilege level, using the APIs in libtacplus_map.so
- * algorithm in update_mapuser()
+ * algorithm in update_mapuser(), but only considering tacacs users.
  * Returns 0 on success, else 1
  */
 static int
 find_pw_userpriv(unsigned priv, struct pwbuf *pb)
 {
     FILE *pwfile;
-    struct passwd upw, tpw, *ent;
-    int matches, ret, retu, rett;
+    struct passwd tpw, *ent;
+    int matches, ret, rett;
     unsigned origpriv = priv;
-    char ubuf[pb->buflen], tbuf[pb->buflen];
+    char tbuf[pb->buflen];
     char tacuser[9]; /* "tacacs" followed by 1-2 digits */
 
     tacuser[0] = '\0';
@@ -440,16 +513,10 @@ find_pw_userpriv(unsigned priv, struct pwbuf *pb)
 
 recheck:
     snprintf(tacuser, sizeof tacuser, "tacacs%u", priv);
-    tpw.pw_name = upw.pw_name = NULL;
-    retu = 0, rett = 0;
-    for(matches=0; matches < 2 && (ent = fgetpwent(pwfile)); ) {
-        if(!ent->pw_name)
-            continue; /* shouldn't happen */
-        if(!strcmp(ent->pw_name, pb->name)) {
-            retu = pwcopy(ubuf, sizeof(ubuf), ent, &upw, NULL, use_tachome);
-            matches++;
-        }
-        else if(!strcmp(ent->pw_name, tacuser)) {
+    tpw.pw_name = NULL;
+    rett = 0;
+    for(matches=0; !matches && (ent = fgetpwent(pwfile)); ) {
+        if(ent->pw_name && !strcmp(ent->pw_name, tacuser)) {
             rett = pwcopy(tbuf, sizeof(tbuf), ent, &tpw, NULL, use_tachome);
             matches++;
         }
@@ -465,12 +532,10 @@ recheck:
         if(priv != origpriv && debug)
             syslog(LOG_DEBUG, "%s: local user not found at privilege=%u,"
                 " using %s", nssname, origpriv, tacuser);
-        if(upw.pw_name && !retu)
-            ret = pwcopy(pb->buf, pb->buflen, &upw, pb->pw, pb->name,
-                use_tachome);
-        else if(tpw.pw_name && !rett)
+        if(tpw.pw_name && !rett) {
             ret = pwcopy(pb->buf, pb->buflen, &tpw, pb->pw, pb->name,
                 use_tachome);
+        }
     }
     if(ret)
        *pb->errnop = ERANGE;
@@ -570,7 +635,7 @@ connect_tacacs(struct tac_attrib **attr, int srvr)
 {
     int fd;
 
-    fd = tac_connect_single(tac_srv[srvr].addr, tac_srv[srvr].key, NULL,
+    fd = tac_connect_single(tac_srv[srvr].addr, tac_srv[srvr].key, src_addr,
         vrfname[0]?vrfname:NULL);
     if(fd >= 0) {
         tac_add_attrib(attr, "service", tac_service);
@@ -581,6 +646,25 @@ connect_tacacs(struct tac_attrib **attr, int srvr)
     }
     return fd;
 }
+
+/*
+ * If all servers have been unresponsive, clear that state, so we try
+ * them all.  It might have been transient.
+ */
+static void tac_chk_anyresp(void)
+{
+    int i, anyok=0;
+
+    for(i = 0; i < tac_srv_no; i++) {
+        if (!tac_srv[i].not_resp)
+            anyok++;
+    }
+    if (!anyok) {
+        for(i = 0; i < tac_srv_no; i++)
+            tac_srv[i].not_resp = 0;
+    }
+}
+
 
 
 /*
@@ -626,12 +710,16 @@ lookup_tacacs_user(struct pwbuf *pb)
         return ret;
     print_servers();
 
+    tac_chk_anyresp();
     for(srvr=0; srvr < tac_srv_no && !done; srvr++) {
+        if (tac_srv[srvr].not_resp)
+            continue; /*  don't retry if previously not responding */
         arep.msg = NULL;
         arep.attr = NULL;
         arep.status = TAC_PLUS_AUTHOR_STATUS_ERROR; /* if author_send fails */
         tac_fd = connect_tacacs(&attr, srvr);
         if (tac_fd < 0) {
+            tac_srv[srvr].not_resp = 1;
             if(debug)
                 syslog(LOG_WARNING, "%s: failed to connect TACACS+ server %s,"
                     " ret=%d: %m", nssname, tac_srv[srvr].addr ?
@@ -642,10 +730,10 @@ lookup_tacacs_user(struct pwbuf *pb)
         ret = tac_author_send(tac_fd, pb->name, "", tac_rhost, attr);
         if(ret < 0) {
             if(debug)
-                syslog(LOG_WARNING, "%s: TACACS+ server %s authorization failed (%d) "
-                    " user (%s)", nssname, tac_srv[srvr].addr ?
-                    tac_ntop(tac_srv[srvr].addr->ai_addr) : "unknown", ret,
-                    pb->name);
+                syslog(LOG_WARNING, "%s: TACACS+ server %s authorization "
+                       "failed (%d) user (%s)", nssname, tac_srv[srvr].addr ?
+                       tac_ntop(tac_srv[srvr].addr->ai_addr) : "unknown", ret,
+                       pb->name);
         }
         else  {
             errno = 0;
@@ -669,12 +757,12 @@ lookup_tacacs_user(struct pwbuf *pb)
            arep.status == AUTHOR_STATUS_PASS_REPL) {
             ret = got_tacacs_user(arep.attr, pb);
             if(debug>1)
-                syslog(LOG_DEBUG, "%s: TACACS+ server %s successful for user %s."
+                syslog(LOG_DEBUG, "%s: TACACS+ server %s successful for user %s"
                     " local lookup %s", nssname,
                     tac_ntop(tac_srv[srvr].addr->ai_addr), pb->name,
-                    ret?"OK":"no match");
+                    ret?"copy problem":"OK");
             else if(debug)
-                syslog(LOG_DEBUG, "%s: TACACS+ server %s successful for user %s",
+                syslog(LOG_DEBUG, "%s: TACACS+ server %s success on user %s",
                     nssname, tac_ntop(tac_srv[srvr].addr->ai_addr), pb->name);
             done = 1; /* break out of loop after arep cleanup */
         }
@@ -700,13 +788,16 @@ lookup_mapped_uid(struct pwbuf *pb, uid_t uid, uid_t auid, int session)
 {
     char *loginname, mappedname[256];
     uint16_t flag;
+    int ret = 1;
 
     mappedname[0] = '\0';
     loginname = lookup_mapuid(uid, auid, session,
                             mappedname, sizeof mappedname, &flag);
-    if(loginname)
-        return find_pw_user(loginname, mappedname, pb, flag & MAP_USERHOMEDIR);
-    return 1;
+    if(loginname) {
+        ret = find_pw_user(loginname, mappedname, pb, flag & MAP_USERHOMEDIR);
+        free(loginname);
+    }
+    return ret;
 }
 
 /*
@@ -727,51 +818,47 @@ enum nss_status _nss_tacplus_getpwnam_r(const char *name, struct passwd *pw,
     char *buffer, size_t buflen, int *errnop)
 {
     enum nss_status status = NSS_STATUS_NOTFOUND;
-    int result;
+    int result, lookup;
     struct pwbuf pbuf;
 
-    result = nss_tacplus_config(errnop, config_file, 1);
-    conf_parsed = result == 0 ? 2 : 1;
+    result = get_config(errnop, 1);
+    if(result)
+        return status;
 
-    get_remote_addr();
+    /* marshal the args for the lower level functions */
+    pbuf.name = (char *)name;
+    pbuf.pw = pw;
+    pbuf.buf = buffer;
+    pbuf.buflen = buflen;
+    pbuf.errnop = errnop;
 
-    if(result) { /* no config file, no servers, etc. */
-        /*  this is a debug because privileges may not allow access */
-        if(debug)
-            syslog(LOG_DEBUG, "%s: bad config or server line for nss_tacplus",
-                nssname);
+    lookup = lookup_tacacs_user(&pbuf);
+    if(!lookup) {
+        status = NSS_STATUS_SUCCESS;
+        if (errnop)
+            *errnop = 0;
     }
-    else {
-        int lookup;
-
-        /* marshal the args for the lower level functions */
-        pbuf.name = (char *)name;
-        pbuf.pw = pw;
-        pbuf.buf = buffer;
-        pbuf.buflen = buflen;
-        pbuf.errnop = errnop;
-
-        lookup = lookup_tacacs_user(&pbuf);
-        if(!lookup)
+    else if(lookup == 1) { /*  2 means exclude_users match */
+        uint16_t flag;
+        /*
+         * If we can't contact a tacacs server (either not configured, or
+         * more likely, we aren't running as root and the config for the
+         * server is not readable by our uid for security reasons), see if
+         * we can find the user via the mapping database, and if so, use
+         * that.  This will work for non-root users as long as the requested
+         * name is in use (that is, logged in), which will be the most
+         * common case of wanting to use the original login name by non-root
+         * users.
+         */
+        char *mapname = lookup_mapname(name, -1, -1, NULL, &flag);
+        if(mapname != name && !find_pw_user(name, mapname, &pbuf,
+                flag & MAP_USERHOMEDIR))
             status = NSS_STATUS_SUCCESS;
-        else if(lookup == 1) { /*  2 means exclude_users match */
-            uint16_t flag;
-            /*
-             * If we can't contact a tacacs server (either not configured, or
-             * more likely, we aren't running as root and the config for the
-             * server is not readable by our uid for security reasons), see if
-             * we can find the user via the mapping database, and if so, use
-             * that.  This will work for non-root users as long as the requested
-             * name is in use (that is, logged in), which will be the most
-             * common case of wanting to use the original login name by non-root
-             * users.
-             */
-            char *mapname = lookup_mapname(name, -1, -1, NULL, &flag);
-            if(mapname != name && !find_pw_user(name, mapname, &pbuf,
-                    flag & MAP_USERHOMEDIR))
-                status = NSS_STATUS_SUCCESS;
-        }
     }
+
+    if (status == NSS_STATUS_SUCCESS && errnop)
+        *errnop = 0; /*  be sane, no stale errno */
+
    return status;
 }
 
@@ -811,12 +898,11 @@ enum nss_status _nss_tacplus_getpwuid_r(uid_t uid, struct passwd *pw,
 {
     struct pwbuf pb;
     enum nss_status status = NSS_STATUS_NOTFOUND;
-    int session, ret;
+    int session;
     uid_t auid;
 
-    ret = nss_tacplus_config(errnop, config_file, 1);
-    conf_parsed = ret == 0 ? 2 : 1;
-
+    (void) get_config(errnop, 1);
+    /*  config errors aren't fatal here */
     if (min_uid != ~0U && uid < min_uid) {
         if(debug > 1)
             syslog(LOG_DEBUG, "%s: uid %u < min_uid %u, don't lookup",
@@ -873,4 +959,394 @@ static void get_remote_addr(void)
     snprintf(tac_rhost, sizeof tac_rhost, "%s", ipstr);
     if(debug > 1 && tac_rhost[0])
         syslog(LOG_DEBUG, "%s: rhost=%s", nssname, tac_rhost);
+}
+
+/* start of infrastructure for getgr* routines */
+
+static int copyuser(char **grmem, const char *user, long long *blen,
+                    int *err)
+{
+    size_t l = strlen(user) + 1;
+    *blen -= l;
+    if (*blen < 0) {
+        *err = ERANGE;
+        return 1;
+    }
+    strcpy(*grmem, user);
+    *grmem += l;
+    return 0;
+}
+
+/*
+* Return a char ** list of strings of usernames from the mapping db
+* that for each username such as tacacs15, looks up that name and
+* replaces it with usernames logged in and mapped to that name,
+* for replacing the gr_mem field for getgrent(), etc.
+* Passed the original gr_mem array straight from the group file.
+* All strings go into buf, and we return ERANGE in *err if there
+* isn't enough room.
+* The allocated memory will leak, but it's re-used on each call, so
+* not too signficant, and if endgrent() gets called, we'll clean up.
+*/
+static char **
+fixup_gr_mem(const char *grnam, const char **gr_in, char *buf,
+             size_t *lenp, int *err)
+{
+    int nadded = 0, midx = 0;
+    long long l = 0, len = *lenp;   /* size_t unsigned on some systems */
+    const char **in;
+    char **out = NULL, *mem = buf;
+    char **gr_mem;
+    const unsigned align = sizeof(void *) - 1;
+
+    *err = 0;
+
+    /* set up to copy to supplied buffer */
+    l = (((ptrdiff_t)mem + align) & align);
+    len -= align;
+    mem += align;
+    gr_mem = (char **)mem;
+
+    if (!gr_in)
+        goto done;
+
+    /* sort of ugly to have to do this twice, to reserve enough
+     * space in gr_mem, but it's not too expensive, no connects
+     * to a tacacs server.
+    */
+    for (in=gr_in; in && *in; in++) {
+        char *mapnames = lookup_all_mapped(*in);
+        if (mapnames) { /*  comma separated list was returned  */
+            char *saved, *tok;
+            tok = strtok_r(mapnames, ",", &saved);
+            while (tok) {
+                nadded++;
+                tok = strtok_r(NULL, ",", &saved);
+            }
+        }
+        else
+            nadded++;
+    }
+    l = sizeof *gr_mem * (nadded+1);
+    len -= l;
+    mem += l;
+
+    /*  do the copying in this loop */
+    for (in=gr_in; in && *in; in++) {
+        char *mapnames = lookup_all_mapped(*in);
+        if (mapnames) { /*  comma separated list was returned  */
+            char *saved, *tok;
+            tok = strtok_r(mapnames, ",", &saved);
+            while (tok) {
+                gr_mem[midx] = mem;
+                if(copyuser(&mem, tok, &len, err))
+                    goto done;
+                midx++;
+                tok = strtok_r(NULL, ",", &saved);
+            }
+        }
+        else { /*  just copy what was returned to the buffer */
+            gr_mem[midx] = mem;
+            if(copyuser(&mem, *in, &len, err))
+                goto done;
+            midx++;
+        }
+    }
+
+ done:
+    gr_mem[midx] = NULL;        /*  terminate the list */
+
+    if (*err) {
+        syslog(LOG_WARNING, "%s: group %s members truncated due to short"
+               " buffer %lld characters", nssname, grnam, (long long)*lenp);
+        *lenp = 0;
+    } else {
+        out = gr_mem;
+        *lenp = mem - buf;
+    }
+    return out;
+}
+
+/* end of infrastructure for getgr* routines */
+/*
+* The group routines are here so we can substitute mappings for radius_user
+* and radius_priv_user when reading /etc/group, so that we can make
+* users members of the appropriate groups for various privileged
+* (and unprivileged) tasks.
+* Ideally, we'd be able to use the getgr* routines specifying compat,
+* but the NSS plugin infrastructure doesn't support that, so we have to
+* read /etc/group directly, and then do our substitutions.
+*
+* This won't work if the RADIUS users are in LDAP group and/or password
+* files, but that's the way it goes.
+*
+* For the intended purpose, it works well enough.
+*
+* We need getgrent() for this one, because initgroups needs it, unlike
+* the password file.
+*/
+
+static FILE *grent;
+
+__attribute__((visibility("default")))
+enum nss_status _nss_tacplus_setgrent(void)
+{
+    enum nss_status status = NSS_STATUS_NOTFOUND;
+    static const char *grpname = "/etc/group";
+    int error, errval;
+
+    error = get_config(&errval, 1);
+    if(error)
+        return errval == ENOENT ? NSS_STATUS_UNAVAIL : status;
+
+    if (grent) {
+        rewind(grent);
+        status = NSS_STATUS_SUCCESS;
+        goto done;
+    }
+
+    grent = fopen(grpname, "r");
+    if (!grent) {
+        syslog(LOG_WARNING, "%s: failed to open %s: %m", nssname, grpname);
+        status = NSS_STATUS_UNAVAIL;
+    } else {
+        status = NSS_STATUS_SUCCESS;
+        /*  don't leave fd open across execs */
+        (void)fcntl(fileno(grent), F_SETFD, FD_CLOEXEC);
+    }
+ done:
+    return status;
+}
+
+__attribute__((visibility("default")))
+enum nss_status _nss_tacplus_endgrent(void)
+{
+    if (grent) {
+        FILE *f = grent;
+        grent = NULL;
+        (void)fclose(f);
+    }
+    return NSS_STATUS_SUCCESS;
+}
+
+/*
+* do the fixups and copies, using the passed in buffer.  result must
+* have been checked to be sure it's non-NULL before calling.
+*/
+static int fixup_grent(struct group *entry, struct group *result, char *buf,
+                       size_t lenbuf, int *errp)
+{
+    char **grusr, **new_grmem = NULL;
+    struct group *newg;
+    long long l, len;           /* size_t unsigned on some systems */
+    int err, members, memlen;
+    int ret = NSS_STATUS_NOTFOUND;
+    char *nm = entry->gr_name ? entry->gr_name : "(nil)";
+    size_t usedbuf;
+
+    if (!result)                /* should always be non-NULL, just cautious */
+        return ret;
+
+    len = lenbuf;
+    if (!errp)                  /*  to reduce checks below */
+        errp = &err;
+    *errp = 0;
+
+    newg = (struct group *)buf;
+    len -= sizeof *newg;
+    buf += sizeof *newg;
+    if (len < 0) {
+        *errp = ENOMEM;
+        return ret;
+    }
+    newg->gr_gid = entry->gr_gid;
+    l = snprintf(buf, len, "%s", entry->gr_name);
+    newg->gr_name = buf;
+    len -= l + 1;
+    buf += l + 1;
+    if (len > 0) {
+        l = snprintf(buf, len, "%s", entry->gr_passwd);
+        newg->gr_passwd = buf;
+        len -= l + 1;
+        buf += l + 1;
+    }
+    if (len < 0) {
+        *errp = ENOMEM;
+        return NSS_STATUS_TRYAGAIN;
+    }
+
+    /*
+     * for each member in the group, see if it's a tacacs mapped name, and if
+     * so, replace it with the login name(s) mapped to it, if any, otherwise
+     * leave it as is.
+     */
+    for (memlen=members=0, grusr=entry->gr_mem; grusr && *grusr; grusr++) {
+        members++;
+        memlen += strlen(*grusr) + 1;
+    }
+
+    usedbuf = len;
+
+    /*  substitute login names (if any) for mapped users */
+    new_grmem = fixup_gr_mem(nm, (const char **)entry->gr_mem,
+                             buf, &usedbuf, errp);
+    buf += usedbuf;
+    len -= usedbuf;
+    if (errp) {
+        if (*errp == ERANGE)
+            ret = NSS_STATUS_TRYAGAIN;
+        else if (*errp == ENOENT)
+            ret = NSS_STATUS_UNAVAIL;
+
+    } else if (len < 0) {
+        *errp = ERANGE;
+        ret = NSS_STATUS_TRYAGAIN;
+    }
+
+    if (*errp)
+        goto done;
+    *result = *newg;
+    if (new_grmem)
+        result->gr_mem = new_grmem;
+    else {
+        char **sav, **entgr, *usrbuf;
+        len -= (members + 1) * sizeof *new_grmem;
+        len -= memlen;
+        if (len < 0) {
+            *errp = ERANGE;
+            ret = NSS_STATUS_TRYAGAIN;
+            goto done;
+        }
+        sav = result->gr_mem = (char **)buf;
+        buf += (members + 1) * sizeof *new_grmem;
+        usrbuf = buf;
+
+        for (entgr = entry->gr_mem; entgr && *entgr; entgr++, sav++) {
+            *sav = usrbuf;
+            usrbuf += strlen(*entgr) + 1;
+            strcpy(*sav, *entgr);
+        }
+
+        *sav = NULL;
+    }
+    ret = NSS_STATUS_SUCCESS;
+ done:
+    return ret;
+}
+
+/*
+* No locking needed because our only global is the dirent * for
+* the runuser directory, and our use of that should be thread safe
+*/
+__attribute__((visibility("default")))
+enum nss_status _nss_tacplus_getgrent_r(struct group *gr_result,
+                                        char *buffer, size_t buflen,
+                                        int *errnop)
+{
+    enum nss_status status = NSS_STATUS_NOTFOUND;
+    struct group *ent;
+    int ret = 1;
+    int localerr;
+
+    if (!gr_result) {
+        if (errnop)
+            *errnop = EFAULT;
+        return status;
+    }
+
+    ret = get_config(errnop, 1);
+    if(ret)
+        return errnop && *errnop == ENOENT ? NSS_STATUS_UNAVAIL : status;
+
+    if (!grent) {
+        status = _nss_tacplus_setgrent();
+        if (status != NSS_STATUS_SUCCESS)
+            return status;
+    }
+
+    ent = fgetgrent(grent);
+    if (!ent) {
+        int e = errno;
+        if (ferror(grent)) {
+            syslog(LOG_WARNING,
+                   "%s: error reading group information: %m", nssname);
+            errno = e;
+        } else
+            errno = 0;
+        return status;
+    }
+    ret = fixup_grent(ent, gr_result, buffer, buflen, &localerr);
+    if (errnop)
+        *errnop = localerr;
+    return ret;
+}
+
+__attribute__((visibility("default")))
+enum nss_status _nss_tacplus_getgrnam_r(const char *name, struct group *gr,
+                                        char *buffer, size_t buflen,
+                                        int *errnop)
+{
+    enum nss_status status = NSS_STATUS_NOTFOUND;
+    int ret;
+    struct group *ent;
+    int localerr;
+
+    if (!gr) {
+        if (errnop)
+            *errnop = EFAULT;
+        return status;
+    }
+
+    ret = get_config(errnop, 1);
+    if(ret)
+        return errnop && *errnop == ENOENT ? NSS_STATUS_UNAVAIL : status;
+
+    if (_nss_tacplus_setgrent() != NSS_STATUS_SUCCESS)
+        return status;
+
+    for (ent = fgetgrent(grent); ent; ent = fgetgrent(grent)) {
+        if (!strcmp(ent->gr_name, name)) {
+            status = fixup_grent(ent, gr, buffer, buflen, &localerr);
+            if (errnop)
+                *errnop = localerr;
+            break;
+        }
+    }
+
+    return status;
+}
+
+__attribute__((visibility("default")))
+enum nss_status _nss_tacplus_getgrgid_r(gid_t gid, struct group *gr,
+                                        char *buffer, size_t buflen,
+                                        int *errnop)
+{
+    int ret;
+    enum nss_status status = NSS_STATUS_NOTFOUND;
+    struct group *ent;
+    int localerr;
+
+    if (!gr) {
+        if (errnop)
+            *errnop = EFAULT;
+        return status;
+    }
+
+    ret = get_config(errnop, 1);
+    if(ret)
+        return errnop && *errnop == ENOENT ? NSS_STATUS_UNAVAIL : status;
+
+    if (_nss_tacplus_setgrent() != NSS_STATUS_SUCCESS)
+        return status;
+
+    for (ent = fgetgrent(grent); ent; ent = fgetgrent(grent)) {
+        if (ent->gr_gid == gid) {
+            status = fixup_grent(ent, gr, buffer, buflen, &localerr);
+            if (errnop)
+                *errnop = localerr;
+            break;
+        }
+    }
+
+    return status;
 }

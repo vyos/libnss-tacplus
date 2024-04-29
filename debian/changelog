@@ -1,16 +1,71 @@
-libnss-tacplus (1.0.3-2) unstable; urgency=low
+libnss-tacplus (1.0.4-cl5.1.0u11) RELEASED; urgency=medium
+
+  * new build for 5.1.0 from original hash
+    cf2f734609a59da41248ed45e95807998a4a75f3
+
+ -- root <root@3da22e72fb7c>  Fri, 11 Feb 2022 20:25:59 +0000
+
+libnss-tacplus (1.0.4-cl4u1) RELEASED; urgency=medium
+
+   * First 4.0 release
+   * Implemented the nss group entry points, so sudoers plugin no longer
+     needed
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Tue, 22 Oct 2019 08:18:08 -0700
+
+libnss-tacplus (1.0.4-cl3u3) RELEASED; urgency=low
+  * Fixed problem with fallback to local authorization when
+    all TACACS servers are down
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Tue, 21 Aug 2018 16:14:31 -0700
+
+libnss-tacplus (1.0.4-cl3u2) RELEASED; urgency=low
+  * Optimized attempts to connect to server that has previously not responded
+  * Added tacplus_nss.conf man page
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Fri, 29 Jun 2018 13:43:12 -0700
+
+libnss-tacplus (1.0.4-cl3u1) RELEASED; urgency=low
+  * New: Enabled - added the ability to set the source IP address via
+    the source_ip config variable.
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Tue, 03 Jul 2018 17:10:17 -0700
+
+libnss-tacplus (1.0.3-cl3u4) RELEASED; urgency=low
+  * Added man, snmp, daemon, nobody, cron, radius users and frr to
+    exclude_users to prevent tacacs lookup on these system accounts.
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Wed, 14 Feb 2018 14:14:00 -0800
+
+libnss-tacplus (1.0.3-cl3u3) RELEASED; urgency=low
+  * do not log message about acct_all unknown config variable
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Thu, 28 Sep 2017 14:47:10 -0700
+
+libnss-tacplus (1.0.3-cl3u2) RELEASED; urgency=low
   * Fixed package remove to clean up plugin entries in nsswitch.conf
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Fri, 30 Jun 2017 13:34:20 -0700
+
+libnss-tacplus (1.0.3-cl3u1) RELEASED; urgency=low
   * New Disabled: added user_homedir config variable to allow per-user
     home directories (unless per-command authorization is enabled)
-  * Fixed configuration files should automatically be reparsed
+  * Closes: CM-16082: configuration files should automatically be reparsed
     if they change, for long-lived programs and daemons that use NSS.
 
- -- Dave Olson <olson@cumulusnetworks.com>  Fri, 30 Jun 2017 13:34:20 -0700
+ -- dev-support <dev-support@cumulusnetworks.com>  Fri, 12 May 2017 14:51:23 -0700
 
-libnss-tacplus (1.0.3-1) unstable; urgency=low
-  * Added config variable "timeout" to limit time attempting to
+libnss-tacplus (1.0.2-cl3u1) RELEASED; urgency=low
+  * New Enabled: added vrf config variable, so NSS lookups work 
+    for normal ssh use (rather than ssh@mgmt)
+  * Closes: CM-15481: During login, send remote add IP address in AUTH request
+
+ -- dev-support <dev-support@cumulusnetworks.com>  Tue, 07 Mar 2017 14:54:34 -0800
+
+libnss-tacplus (1.0.1-cl3u3) RELEASED; urgency=low
+  * New Enabled: added config variable "timeout" to limit time attempting to
     connect to non-responding TACACS server.
-  * Added config variable "exclude_users" in /etc/tacplus_nss
+  * New Enabled: added config variable "exclude_users" in /etc/tacplus_nss
     to avoid looking up "local" user accounts via TACACS servers.  This
     improves overall system performance for local users, and avoids significant
     delays when a TACACS server is unreachable.
@@ -18,16 +73,10 @@ libnss-tacplus (1.0.3-1) unstable; urgency=low
     libraries can connect to a TACACS+ server without being tacacs aware.
   * Improved debugging messages.
   * Minor corrections to Copyright and licensing
-  * Added vrf config variable, so NSS lookups work correctly$
-  * During login, send remote add IP address in AUTH request
-  * Configuration files should automatically be reparsed
-    if they change, for long-lived programs and daemons that use NSS.
-  * Added user_homedir config variable to allow per-user
-    home directories (unless per-command authorization is enabled)
 
- -- Dave Olson <olson@cumulusnetworks.com>  Thu, 23 Mar 2017 22:40:01 -0800
+ -- dev-support <dev-support@cumulusnetworks.com>  Tue, 29 Nov 2016 16:55:16 -0800
 
-libnss-tacplus (1.0.2-1) unstable; urgency=low
+libnss-tacplus (1.0.1-cl3eau2) RELEASED; urgency=low
 
   * Improve debugging on server connections, and always try all
     servers in list until successful response, in case different
@@ -36,13 +85,13 @@ libnss-tacplus (1.0.2-1) unstable; urgency=low
   * Add min_uid and exclude_users config variables to avoid TACACS+
     lookups of local users, for robustness and performance.
 
- -- Dave Olson <olson@cumulusnetworks.com>  Thu, 06 Oct 2016 14:13:43 -0700
+ -- dev-support <dev-support@cumulusnetworks.com>  Fri, 30 Sep 2016 13:56:05 -0700
 
-libnss-tacplus (1.0.1-1) unstable; urgency=low
+libnss-tacplus (1.0.1-cl3eau1) RELEASED; urgency=low
 
   * Initial version with NSS lookups for tacacs users using mapping
     Works with modified libpam-tacplus to authenticate TACACS+ users
     without local passwd entries, mapping them to tacacs0..15 based on
     TACACS privilege level.
 
- -- Dave Olson <olson@cumulusnetworks.com>  Thu, 23 Jun 2016 13:31:01 -0700
+ -- dev-support <dev-support@cumulusnetworks.com>  Thu, 23 Jun 2016 13:31:01 -0700

@@ -1,0 +1,114 @@
+.TH tacplus_nss.conf 5
+.\" Copyright 2018, 2019 Cumulus Networks, Inc.  All rights reserved.
+.SH NAME
+/etc/tacplus_nss.conf \- TACACS+ client configuration file
+.SH SYNOPSIS
+.B /etc/tacplus_nss.conf
+is the primary configuration file for the NSS tacplus client plugin.
+.SH DESCRIPTION
+All NSS passwd and group lookups for the tacplus client use this configuration file.
+This plugin
+does lookups on TACACS+ user information, and for group lookups, substitutes the
+login name of tacacs users for the mapping names
+.IR tacacs0 ... tacacs15 .
+These accounts must be listed in the
+.B /etc/passwd
+and
+.B /etc/group
+files for the client-side mapping based on privilege level to work successful.
+.PP
+The
+.I tacplus_nss.conf
+file is minimal, because it uses the
+.I include
+directive to read the
+.I /etc/tacplus_servers
+file for most of the configuration items.
+.P
+However, non-root accounts will not be able to read the
+.I /etc/tacplus_servers
+contents due to required security file permissions.  This normally is not an issue,
+due to the use of the tacplus client mapping database.
+.P
+Configuration variables set prior to the
+.I include
+directive may be modified or extended by the common configuration file.
+Those that follow the
+.I include
+directive will override those in the common configuration file.
+.PP
+Most commonly, the
+.I timeout
+and
+.I debug
+variables are set in this configuration file, so they can use different
+values than the PAM libraries, etc.
+.PP
+Programs using the NSS tacplus plugin may not be able to read this
+file when running as a non-root user (because
+.I tacplus_servers
+has permissions that do not allow world-access, because it contains the
+shared secret key.
+Typically the
+.B secret
+keyword should not be used in this NSS configuration files, for that reason.
+.PP
+.I debug=Number
+Output debugging information via syslog(3).
+Debugging is heavy, including passwords. Do not leave debugging enabled on a production switch once you have completed troubleshooting.  Currently most components only check to see if it is non-zero.  Some components will print additional debug if set to
+.BR 2 .
+.TP
+.I timeout=SECONDS
+Sets the per-connection timeout for reaching the TACACS+ server(s).  For the NSS plugin,
+there is typically only one connection per lookup.
+The libnss functionality typically sets a smaller timeout in it's
+own configuration file than the value set in
+.IR /etc/tacplus_servers ,
+because NSS lookups are more frequent and less important than logins.
+.TP
+.I include=/file/name
+Open the listed file, and continue to read configuration from that file,
+if the open is successful.  This avoids duplication of configuration information.
+A maximum of 8 configuration files may be used.
+.TP
+.I min_uid=value
+This is the minimum uid the NSS plugin will lookup.  Setting this to 0
+means uid 0 (root) is never looked up, good for robustness and performance
+Cumulus Linux ships with it set to 1001, to ignore system users and the
+.I cumulus
+user, which typically has the uid 1000.  Should not be greater
+than the local
+.IR tacacs0 ... tacacs15
+usernames, or they will not be looked up.
+.TP
+.I exclude_users=user1,user2,*,...
+This is a comma separated list of usernames that are never looked up
+by this NSS plugin, instead they cause an early not found return.
+.B *
+(asterisk) is not a wild card in this list.  While it's not a legal username,
+bash may lookup this as a user name during pathname completion, so
+it is included in this list as a username string.
+.PP
+For all the other configuration variables, see the
+.I /etc/tacplus_servers
+file and it's man page.
+.SH "SEE ALSO"
+.BR tacplus_servers (5),
+.IR getpwnam (3),
+.IR getpwnam_r (3),
+.IR getpwuid (3),
+.IR getpwuid_r (3).
+.IR getgrnam (3),
+.IR getpgram_r (3),
+and
+.IR getpgrent (3).
+.SH FILES
+.I /etc/tacplus_nss.conf
+- configuration file for TACACS+ NSS lookups
+.br
+.I /etc/tacplus_servers -
+default top-level TACSCS+ client configuration, that is included by
+.I /etc/tacplus_nss.conf
+to avoid duplicating configuration information.
+.SH AUTHOR
+Dave Olson <olson@cumulusnetworks.com>

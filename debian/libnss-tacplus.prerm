@@ -7,6 +7,8 @@ if [ "$1" = remove ]; then
     if [ -e "/etc/nsswitch.conf" ]; then
         sed -i -e '/^passwd:.*tacplus\s/s/tacplus\s//' \
             /etc/nsswitch.conf || true # don't prevent remove on error
+        sed -i -e '/^group:.*tacplus\s/s/tacplus\s//' \
+            /etc/nsswitch.conf || true # don't prevent remove on error
     fi
 fi
 
