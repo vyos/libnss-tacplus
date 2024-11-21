@@ -18,7 +18,7 @@ nss_tacplus.h
 
 dist_man_MANS = tacplus_nss.conf.5
 
-libnss_tacplus_la_CFLAGS = $(AM_CFLAGS)
+libnss_tacplus_la_CFLAGS = -Wno-error=address -Wno-error=stringop-truncation $(AM_CFLAGS)
 # Version 2.0 because that's the NSS module version, and they must match
 libnss_tacplus_la_LDFLAGS = -module -version-info 2:0:0 -shared
 libnss_tacplus_la_LIBADD = -ltacplus_map -ltac -laudit

@@ -12,7 +12,7 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 # main packaging script based on dh7 syntax
 %:
-	dh $@ --with autotools-dev
+	dh $@ --with autoreconf
 
 # this library installs into /lib, not /usr/lib; I don't see any other
 # way to do this, although there must be a way...
