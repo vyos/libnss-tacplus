@@ -144,7 +144,7 @@ static int str_to_ipv4(const char *srcaddr, struct addrinfo *p_addr_info)
 static int nss_tacplus_config(int *errnop, const char *cfile, int top)
 {
     FILE *conf;
-    char lbuf[256];
+    char lbuf[2048];
     static struct stat lastconf[MAX_INCL];
     static char *cfilelist[MAX_INCL];
     struct stat st, *lst;
