@@ -1,3 +1,9 @@
+libnss-tacplus (1.0.4-cl5.1.0u11.1) UNRELEASED; urgency=medium
+
+  * Improve line buffer for config file from 256 -> 2048 byte
+
+ -- Christian Breunig <christian@breunig.cc>  Sun, 15 Dec 2024 10:40:40 +0100
+
 libnss-tacplus (1.0.4-cl5.1.0u11) RELEASED; urgency=medium
 
   * new build for 5.1.0 from original hash
