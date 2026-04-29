@@ -7,14 +7,13 @@ NSS plugin (`libnss_tacplus.so`) that resolves `getpwnam` lookups for TACACS+-au
 ## Tech stack
 
 - C, GNU autotools (`configure.ac`, `Makefile.am`, `aclocal.m4`).
-- Debian packaging in `debian/` (debhelper >= 9, autotools-dev, `libtac-dev`, `libtacplus-map-dev`, `libaudit-dev`, `libpam-tacplus-dev`).
+- Debian packaging in `debian/` (debhelper >= 9, autotools-dev, `libtac-dev`).
 - License: GPL-2.0 (per `COPYING`).
 
 ## Build / test / run
 
 ```sh
-./auto.sh                 # autoreconf (generates ./configure)
-./configure
+./auto.sh                 # autoreconf + ./configure
 make
 sudo make install         # installs libnss_tacplus.so + tacplus_nss.conf
 dpkg-buildpackage -us -uc # debian package build
@@ -47,7 +46,3 @@ Mirror twin: `VyOS-Networks/libnss-tacplus`. Canonical side is here. The mirror 
 - README is upstream's `libnss_tacplus v1.0.1` text (June 2016) — do not assume it documents VyOS-specific patches.
 - Outbound webhook to `hooks.zapier.com` is configured at the repo level (audit baseline 2026-04-18).
 - LTS-only changes go to `sagitta`/`circinus`/`equuleus` branches if/when created; today only `master` exists.
-
----
-
-This file is mirrored on Confluence: [`vyos/libnss-tacplus`](https://internal.confluence.vyos.com/wiki/spaces/VYOS/pages/818544732). The Confluence page also carries the per-repo audit data (settings, workflows, secret counts, hygiene) that complements this CLAUDE.md. Edit either side; resync via the documentation pipeline.
