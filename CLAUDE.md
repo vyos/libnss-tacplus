@@ -7,13 +7,14 @@ NSS plugin (`libnss_tacplus.so`) that resolves `getpwnam` lookups for TACACS+-au
 ## Tech stack
 
 - C, GNU autotools (`configure.ac`, `Makefile.am`, `aclocal.m4`).
-- Debian packaging in `debian/` (debhelper >= 9, autotools-dev, `libtac-dev`).
+- Debian packaging in `debian/` (debhelper >= 9, autotools-dev, `libtac-dev`, `libtacplus-map-dev`, `libaudit-dev`, `libpam-tacplus-dev`).
 - License: GPL-2.0 (per `COPYING`).
 
 ## Build / test / run
 
 ```sh
-./auto.sh                 # autoreconf + ./configure
+./auto.sh                 # autoreconf (generates ./configure)
+./configure
 make
 sudo make install         # installs libnss_tacplus.so + tacplus_nss.conf
 dpkg-buildpackage -us -uc # debian package build
