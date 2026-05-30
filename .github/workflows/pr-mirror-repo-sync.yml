@@ -3,16 +3,16 @@ name: PR Mirror and Repo Sync
 on:
   pull_request_target:
     types: [closed]
-    branches: [master]
+    branches: [rolling]
   workflow_dispatch:
     inputs:
       sync_branch:
         description: 'Branch to mirror'
         required: true
-        default: 'master'
+        default: 'rolling'
         type: choice
         options:
-          - master
+          - rolling
 
 permissions:
   pull-requests: write
@@ -29,7 +29,7 @@ jobs:
       )
     uses: vyos/.github/.github/workflows/pr-mirror-repo-sync.yml@production
     with:
-      sync_branch: ${{ github.event.inputs.sync_branch || 'master' }}
+      sync_branch: ${{ github.event.inputs.sync_branch || 'rolling' }}
     secrets:
       PAT: ${{ secrets.PAT }}
       REMOTE_OWNER: ${{ secrets.REMOTE_OWNER }}
